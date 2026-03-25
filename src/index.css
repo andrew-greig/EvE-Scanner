@@ -1,0 +1,22 @@
+@import "tailwindcss";
+
+/* Point to your source files so Tailwind sees your layout classes */
+@source "../index.html";
+@source "./**/*.{ts,tsx}";
+
+/* loading animation */
+@keyframes loading-bar {
+  0% { transform: translateX(-100%); }
+  50% { transform: translateX(0); }
+  100% { transform: translateX(100%); }
+}
+
+/* Add a basic reset to ensure the app fills the screen */
+@layer base {
+  html, body, #root {
+    height: 100%;
+    margin: 0;
+    padding: 0;
+    overflow: hidden;
+  }
+}

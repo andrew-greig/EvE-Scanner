@@ -1,0 +1,27 @@
+# Created by venv; see https://docs.python.org/3/library/venv.html
+
+# --- EVE Intel Project Specifics ---
+.env
+eve_intel.db
+*.jsonl
+*.zip
+
+# --- Python ---
+python-dotenv/
+__pycache__/
+*.py[cod]
+*$py.class
+.venv/
+venv/
+ENV/
+
+# --- Node / Frontend ---
+node_modules/
+dist/
+dist-ssr/
+*.local
+.eslintcache
+
+# --- OS Specific ---
+.DS_Store
+Thumbs.db
