@@ -36,15 +36,21 @@ Create a `.env` file in the root directory:
 CLIENT_ID=your_eve_client_id
 SECRET_KEY=your_eve_secret_key
 CALLBACK_URL=http://localhost:8000/callback
+```
 
 ### 3. Dependencies
-# Backend
+
+#### Backend
+```python
 python -m venv python-dotenv
 source python-dotenv/bin/activate  # Windows: .\python-dotenv\Scripts\activate
 pip install fastapi uvicorn httpx sqlalchemy python-dotenv
+```
 
-# Frontend
+#### Frontend
+```
 npm install
+```
 
 ### 4. Startup
-Run "startup.bat" for Windows installations or "startup.sh" on Linux.
+Run `startup.bat` for Windows or `startup.sh` for Linux installations.
