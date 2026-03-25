@@ -10,6 +10,40 @@ const getSecColor = (sec: number) => {
   return '#EF0000';
 };
 
+// ---------------------------------------------------------------------------
+// Text-to-speech helper
+// Speaks kill alerts for the current system and all neighbors with k1h > 0.
+// Silent if nothing to report.
+// ---------------------------------------------------------------------------
+function speakIntel(current: any, connections: any[]) {
+  if (!window.speechSynthesis) return;
+
+  const lines: string[] = [];
+
+  if (current?.k1h > 0) {
+    lines.push(`There have been ${current.k1h} local kill${current.k1h === 1 ? '' : 's'} in the past hour.`);
+  }
+
+  (connections || []).forEach((sys: any) => {
+    if (sys?.k1h > 0) {
+      lines.push(`${sys.k1h} recent kill${sys.k1h === 1 ? '' : 's'} detected in ${sys.name}.`);
+    }
+  });
+
+  if (lines.length === 0) return;
+
+  // Cancel any in-progress speech before queuing new alerts
+  window.speechSynthesis.cancel();
+
+  lines.forEach((text) => {
+    const utt = new SpeechSynthesisUtterance(text);
+    utt.rate = 1.05;
+    utt.pitch = 0.9;
+    utt.volume = 1.0;
+    window.speechSynthesis.speak(utt);
+  });
+}
+
 export default function App() {
   const [isLoggedIn, setIsLoggedIn] = useState(false);
   const [pilotName, setPilotName] = useState("");
@@ -28,6 +62,10 @@ export default function App() {
   // closure never reads a stale value after a new search is made.
   const scoutSystemIdRef = useRef<number | null>(null);
 
+  // Track the last system ID we spoke about so routine polls don't re-read
+  // the same intel every 15 s — only speak when the system actually changes.
+  const lastSpokenSystemRef = useRef<number | null>(null);
+
   useEffect(() => {
     if (scoutIntel?.current?.id) {
       scoutSystemIdRef.current = scoutIntel.current.id;
@@ -35,7 +73,7 @@ export default function App() {
   }, [scoutIntel]);
 
   const displayIntel = viewMode === 'LIVE' ? intel : scoutIntel;
-  const activeSystem = displayIntel?.connections?.find((s:any) => s.id === selectedId)
+  const activeSystem = displayIntel?.connections?.find((s: any) => s.id === selectedId)
     || (displayIntel?.current?.id === selectedId ? displayIntel?.current : null);
 
   const isCurrentSystemSelected = displayIntel?.current?.id === selectedId;
@@ -55,6 +93,9 @@ export default function App() {
       setScoutIntel(data);
       setViewMode('SCOUT');
       setSelectedId(system.id);
+      // Always speak when the user actively searches a new system
+      lastSpokenSystemRef.current = system.id;
+      speakIntel(data.current, data.connections);
     } catch (e) { console.error(e); }
     finally {
       setTimeout(() => setIsSearching(false), 800);
@@ -86,6 +127,12 @@ export default function App() {
       const liveRes = await fetch("http://127.0.0.1:8000/user/location");
       const liveData = await liveRes.json();
       setIntel(liveData);
+
+      // Speak when the player moves to a new system (live mode only)
+      if (viewMode === 'LIVE' && liveData?.current?.id !== lastSpokenSystemRef.current) {
+        lastSpokenSystemRef.current = liveData.current?.id ?? null;
+        speakIntel(liveData.current, liveData.connections);
+      }
 
       // Use the ref so we always refresh whichever system was searched last,
       // not the one that was current when the interval was created.
