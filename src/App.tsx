@@ -1,3 +1,4 @@
+// App.tsx
 import React, { useEffect, useState, useRef } from 'react';
 import LocalParser from './components/LocalParser';
 import { Crosshair, Zap, ArrowRightCircle, LogOut, Info, RefreshCcw, Wifi, Search, Loader2 } from 'lucide-react';
@@ -10,21 +11,16 @@ const getSecColor = (sec: number) => {
   return '#EF0000';
 };
 
-// ---------------------------------------------------------------------------
-// Text-to-speech helper
-// Speaks kill alerts for the current system and all neighbors with k1h > 0.
-// Silent if nothing to report.
-// ---------------------------------------------------------------------------
-function speakIntel(current: any, connections: any[]) {
+function speakIntel(currentStats: any, connectionsStats: any[]) {
   if (!window.speechSynthesis) return;
 
   const lines: string[] = [];
 
-  if (current?.k1h > 0) {
-    lines.push(`There have been ${current.k1h} local kill${current.k1h === 1 ? '' : 's'} in the past hour.`);
+  if (currentStats?.k1h > 0) {
+    lines.push(`There have been ${currentStats.k1h} local kill${currentStats.k1h === 1 ? '' : 's'} in the past hour.`);
   }
 
-  (connections || []).forEach((sys: any) => {
+  (connectionsStats || []).forEach((sys: any) => {
     if (sys?.k1h > 0) {
       lines.push(`${sys.k1h} recent kill${sys.k1h === 1 ? '' : 's'} detected in ${sys.name}.`);
     }
@@ -32,7 +28,6 @@ function speakIntel(current: any, connections: any[]) {
 
   if (lines.length === 0) return;
 
-  // Cancel any in-progress speech before queuing new alerts
   window.speechSynthesis.cancel();
 
   lines.forEach((text) => {
@@ -57,13 +52,11 @@ export default function App() {
   const [details, setDetails] = useState<any>(null);
   const [isDetailLoading, setIsDetailLoading] = useState(false);
   const [progress, setProgress] = useState(100);
+  
+  // Track asynchronously loaded killboard stats per system
+  const [killStats, setKillStats] = useState<Record<number, {k1h: number, k24h: number, loading: boolean}>>({});
 
-  // Ref always holds the latest scout system ID so the poll interval
-  // closure never reads a stale value after a new search is made.
   const scoutSystemIdRef = useRef<number | null>(null);
-
-  // Track the last system ID we spoke about so routine polls don't re-read
-  // the same intel every 15 s — only speak when the system actually changes.
   const lastSpokenSystemRef = useRef<number | null>(null);
 
   useEffect(() => {
@@ -77,6 +70,40 @@ export default function App() {
     || (displayIntel?.current?.id === selectedId ? displayIntel?.current : null);
 
   const isCurrentSystemSelected = displayIntel?.current?.id === selectedId;
+
+  const fetchSystemStats = async (id: number) => {
+    setKillStats(prev => ({ ...prev, [id]: { ...(prev[id] || { k1h: 0, k24h: 0 }), loading: true } }));
+    try {
+      const res = await fetch(`http://127.0.0.1:8000/system/stats/${id}`);
+      const data = await res.json();
+      setKillStats(prev => ({ ...prev, [id]: { k1h: data.k1h, k24h: data.k24h, loading: false } }));
+    } catch (e) {
+      setKillStats(prev => ({ ...prev, [id]: { ...(prev[id] || { k1h: 0, k24h: 0 }), loading: false } }));
+    }
+  };
+
+  useEffect(() => {
+    if (!displayIntel || !displayIntel.current) return;
+    const systemsToFetch = [displayIntel.current.id, ...(displayIntel.connections || []).map((c: any) => c.id)];
+    systemsToFetch.forEach(id => {
+       fetchSystemStats(id);
+    });
+  }, [displayIntel]);
+
+  // Handle Intel TTS only after all stats resolve
+  useEffect(() => {
+    if (!displayIntel || !displayIntel.current) return;
+    const currId = displayIntel.current.id;
+    const allIds = [currId, ...(displayIntel.connections || []).map((c: any) => c.id)];
+    const allLoaded = allIds.every(id => killStats[id] && !killStats[id].loading);
+
+    if (allLoaded && currId !== lastSpokenSystemRef.current) {
+      lastSpokenSystemRef.current = currId;
+      const curStats = killStats[currId];
+      const connStats = displayIntel.connections.map((c: any) => ({ name: c.name, k1h: killStats[c.id]?.k1h || 0 }));
+      speakIntel(curStats, connStats);
+    }
+  }, [killStats, displayIntel]);
 
   const handleLogout = async () => {
     await fetch("http://127.0.0.1:8000/logout", { method: "POST" });
@@ -93,9 +120,6 @@ export default function App() {
       setScoutIntel(data);
       setViewMode('SCOUT');
       setSelectedId(system.id);
-      // Always speak when the user actively searches a new system
-      lastSpokenSystemRef.current = system.id;
-      speakIntel(data.current, data.connections);
     } catch (e) { console.error(e); }
     finally {
       setTimeout(() => setIsSearching(false), 800);
@@ -128,14 +152,6 @@ export default function App() {
       const liveData = await liveRes.json();
       setIntel(liveData);
 
-      // Speak when the player moves to a new system (live mode only)
-      if (viewMode === 'LIVE' && liveData?.current?.id !== lastSpokenSystemRef.current) {
-        lastSpokenSystemRef.current = liveData.current?.id ?? null;
-        speakIntel(liveData.current, liveData.connections);
-      }
-
-      // Use the ref so we always refresh whichever system was searched last,
-      // not the one that was current when the interval was created.
       if (viewMode === 'SCOUT' && scoutSystemIdRef.current) {
         const scoutRes = await fetch(`http://127.0.0.1:8000/system/scout/${scoutSystemIdRef.current}`);
         setScoutIntel(await scoutRes.json());
@@ -166,6 +182,8 @@ export default function App() {
   }, [isLoggedIn, viewMode]);
 
   useEffect(() => { if (selectedId) fetchTacticalDetails(selectedId); }, [selectedId]);
+
+  const activeStats = selectedId ? killStats[selectedId] : null;
 
   return (
     <main className={`h-screen w-screen flex flex-col p-3 gap-3 bg-[#080808] text-gray-300 font-sans ${!isLoggedIn ? 'overflow-hidden' : ''}`}>
@@ -220,10 +238,8 @@ export default function App() {
       <div className={`flex-1 grid grid-cols-12 gap-3 min-h-0 ${!isLoggedIn ? 'opacity-40 pointer-events-none grayscale-[0.5]' : ''}`}>
         <section className="col-span-3 bg-[#111] border border-gray-800 rounded p-4 overflow-hidden flex flex-col"><LocalParser /></section>
 
-        {/* CONTAINER FOR INTEL & TACTICAL WITH LOADING OVERLAY */}
         <div className="col-span-9 grid grid-cols-9 gap-3 relative min-h-0">
 
-          {/* SCANNING OVERLAY */}
           {isSearching && (
             <div className="absolute inset-0 z-50 bg-[#080808]/80 backdrop-blur-sm flex flex-col items-center justify-center rounded border border-blue-500/30 overflow-hidden">
                <div className="absolute inset-0 pointer-events-none bg-[radial-gradient(circle_at_center,_transparent_0%,_rgba(30,58,138,0.1)_100%)] animate-pulse" />
@@ -235,23 +251,17 @@ export default function App() {
                </div>
                <p className="text-sm font-black text-blue-400 uppercase tracking-[0.3em] animate-pulse">Establishing Uplink...</p>
                <div className="mt-4 w-48 h-[2px] bg-gray-900 overflow-hidden">
-                  <div className="h-full bg-blue-500 w-full animate-[loading-bar_1.5s_infinite_linear]"
-                       style={{ transform: 'translateX(-100%)' }} />
+                  <div className="h-full bg-blue-500 w-full animate-[loading-bar_1.5s_infinite_linear]" style={{ transform: 'translateX(-100%)' }} />
                </div>
             </div>
           )}
 
-          {/* SYSTEM & NEIGHBORHOOD */}
           <section className="col-span-5 flex flex-col gap-3 overflow-hidden">
 
-            {/* Main system card — clickable to select it in the tactical overview */}
             <button
               onClick={() => displayIntel?.current && setSelectedId(displayIntel.current.id)}
               disabled={!displayIntel?.current}
-              className={`bg-[#111] border rounded p-6 flex flex-col items-center relative w-full text-left transition-all
-                ${isCurrentSystemSelected
-                  ? 'border-blue-500 shadow-lg shadow-blue-900/20'
-                  : 'border-gray-800 hover:border-gray-600 cursor-pointer'}`}
+              className={`bg-[#111] border rounded p-6 flex flex-col items-center relative w-full text-left transition-all ${isCurrentSystemSelected ? 'border-blue-500 shadow-lg shadow-blue-900/20' : 'border-gray-800 hover:border-gray-600 cursor-pointer'}`}
             >
                {viewMode === 'SCOUT' && (
                  <div className="absolute top-4 left-4 text-[10px] font-black bg-orange-900/40 text-orange-400 px-2 py-1 rounded border border-orange-800/50 uppercase">Scouting Mode</div>
@@ -266,8 +276,18 @@ export default function App() {
                </div>
                <p className="text-xs font-bold text-gray-600 uppercase tracking-widest mb-6">Sov: {displayIntel?.current?.owner}</p>
                <div className="flex gap-4 w-full">
-                  <div className="flex-1 bg-black/40 border border-gray-800 p-4 rounded text-center"><p className="text-xs text-gray-500 font-bold uppercase mb-1">1H PvP</p><p className="text-4xl font-mono font-black text-orange-500">{displayIntel?.current?.k1h || 0}</p></div>
-                  <div className="flex-1 bg-black/40 border border-gray-800 p-4 rounded text-center"><p className="text-xs text-gray-500 font-bold uppercase mb-1">24H PvP</p><p className="text-4xl font-mono font-black text-red-600">{displayIntel?.current?.k24h || 0}</p></div>
+                  <div className="flex-1 bg-black/40 border border-gray-800 p-4 rounded text-center">
+                    <p className="text-xs text-gray-500 font-bold uppercase mb-1">1H PvP</p>
+                    <div className="h-10 flex items-center justify-center">
+                      {killStats[displayIntel?.current?.id]?.loading ? <Loader2 className="animate-spin text-orange-500/50" size={32} /> : <p className="text-4xl font-mono font-black text-orange-500">{killStats[displayIntel?.current?.id]?.k1h ?? 0}</p>}
+                    </div>
+                  </div>
+                  <div className="flex-1 bg-black/40 border border-gray-800 p-4 rounded text-center">
+                    <p className="text-xs text-gray-500 font-bold uppercase mb-1">24H PvP</p>
+                    <div className="h-10 flex items-center justify-center">
+                      {killStats[displayIntel?.current?.id]?.loading ? <Loader2 className="animate-spin text-red-600/50" size={32} /> : <p className="text-4xl font-mono font-black text-red-600">{killStats[displayIntel?.current?.id]?.k24h ?? 0}</p>}
+                    </div>
+                  </div>
                </div>
             </button>
 
@@ -279,13 +299,27 @@ export default function App() {
                       <div className="flex items-center gap-3">
                         <ArrowRightCircle size={22} className="text-gray-700" />
                         <div className="text-left">
-                          <div className="flex items-center gap-2"><span className="text-[22px] font-black text-white">{sys.name}</span><span className="font-mono font-black text-[22px]" style={{ color: getSecColor(sys.sec) }}>{sys.sec.toFixed(1)}</span>{sys.has_scout && <Wifi size={16} className="text-cyan-400 animate-pulse" />}</div>
+                          <div className="flex items-center gap-2">
+                            <span className="text-[22px] font-black text-white">{sys.name}</span>
+                            <span className="font-mono font-black text-[22px]" style={{ color: getSecColor(sys.sec) }}>{sys.sec.toFixed(1)}</span>
+                            {sys.has_scout && <Wifi size={16} className="text-cyan-400 animate-pulse" />}
+                          </div>
                           <p className="text-[12px] font-bold text-gray-600 uppercase tracking-widest">{sys.owner}</p>
                         </div>
                       </div>
                       <div className="flex gap-6 font-mono font-black text-center uppercase tracking-tighter">
-                        <div><p className="text-[12px] text-gray-600">1H PvP</p><span className="text-orange-500 text-[20px]">{sys.k1h}</span></div>
-                        <div><p className="text-[12px] text-gray-600">24H PvP</p><span className="text-red-600 text-[20px]">{sys.k24h}</span></div>
+                        <div>
+                          <p className="text-[12px] text-gray-600">1H PvP</p>
+                          <div className="h-6 flex items-center justify-center">
+                            {killStats[sys.id]?.loading ? <Loader2 className="animate-spin text-orange-500/50" size={20} /> : <span className="text-orange-500 text-[20px]">{killStats[sys.id]?.k1h ?? 0}</span>}
+                          </div>
+                        </div>
+                        <div>
+                          <p className="text-[12px] text-gray-600">24H PvP</p>
+                          <div className="h-6 flex items-center justify-center">
+                            {killStats[sys.id]?.loading ? <Loader2 className="animate-spin text-red-600/50" size={20} /> : <span className="text-red-600 text-[20px]">{killStats[sys.id]?.k24h ?? 0}</span>}
+                          </div>
+                        </div>
                       </div>
                     </button>
                   ))}
@@ -293,7 +327,6 @@ export default function App() {
             </div>
           </section>
 
-          {/* TACTICAL OVERVIEW */}
           <section className="col-span-4 bg-[#111] border border-gray-800 rounded p-5 flex flex-col overflow-hidden relative">
             {activeSystem ? (
               <div className={`flex flex-col h-full gap-5 transition-opacity duration-300 ${isDetailLoading ? 'opacity-40' : 'opacity-100'}`}>
@@ -304,8 +337,18 @@ export default function App() {
                 <div className="grid grid-cols-2 gap-3">
                   <div className="bg-black/40 p-3 border border-gray-800 rounded"><p className="text-xs font-black text-gray-500 uppercase mb-1">NPC Kills (1H)</p><p className="text-3xl font-mono font-black text-green-500">{details?.npc_kills_1h ?? '...'}</p></div>
                   <div className="bg-black/40 p-3 border border-gray-800 rounded"><p className="text-xs font-black text-gray-500 uppercase mb-1">Jumps (1H)</p><p className="text-3xl font-mono font-black text-blue-400">{details?.jumps_1h ?? '...'}</p></div>
-                  <div className="bg-black/40 p-3 border border-gray-800 rounded"><p className="text-xs font-black text-gray-500 uppercase mb-1">PvP Kills (1H)</p><p className="text-3xl font-mono font-black text-orange-500">{activeSystem.k1h}</p></div>
-                  <div className="bg-black/40 p-3 border border-gray-800 rounded"><p className="text-xs font-black text-gray-500 uppercase mb-1">PvP Kills (24H)</p><p className="text-3xl font-mono font-black text-red-600">{activeSystem.k24h}</p></div>
+                  <div className="bg-black/40 p-3 border border-gray-800 rounded">
+                    <p className="text-xs font-black text-gray-500 uppercase mb-1">PvP Kills (1H)</p>
+                    <div className="h-9 flex items-center">
+                      {activeStats?.loading ? <Loader2 className="animate-spin text-orange-500/50" size={28} /> : <p className="text-3xl font-mono font-black text-orange-500">{activeStats?.k1h ?? 0}</p>}
+                    </div>
+                  </div>
+                  <div className="bg-black/40 p-3 border border-gray-800 rounded">
+                    <p className="text-xs font-black text-gray-500 uppercase mb-1">PvP Kills (24H)</p>
+                    <div className="h-9 flex items-center">
+                      {activeStats?.loading ? <Loader2 className="animate-spin text-red-600/50" size={28} /> : <p className="text-3xl font-mono font-black text-red-600">{activeStats?.k24h ?? 0}</p>}
+                    </div>
+                  </div>
                 </div>
                 <div className="bg-cyan-900/10 border border-cyan-800/50 rounded p-4">
                    <p className="text-xs font-black text-cyan-400 uppercase mb-3 flex items-center gap-2"><Wifi size={14} /> EVE-Scout Intelligence</p>
