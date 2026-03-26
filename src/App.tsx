@@ -1,7 +1,7 @@
 // App.tsx
 import React, { useEffect, useState, useRef } from 'react';
 import LocalParser from './components/LocalParser';
-import { Crosshair, Zap, ArrowRightCircle, LogOut, Info, RefreshCcw, Wifi, Search, Loader2 } from 'lucide-react';
+import { Crosshair, Zap, ArrowRightCircle, LogOut, Info, RefreshCcw, Wifi, Search, Loader2, BarChart2 } from 'lucide-react';
 
 const getSecColor = (sec: number) => {
   if (sec >= 1.0) return '#2FEFEF';
@@ -39,6 +39,73 @@ function speakIntel(currentStats: any, connectionsStats: any[]) {
   });
 }
 
+// Mini sparkline bar chart for the tactical overview.
+// `data` is [12-24h kills, 4-12h kills, 1-4h kills, 0-1h kills] (oldest → newest).
+function ActivitySparkline({ data }: { data: number[] | null | undefined }) {
+  if (!data) return null;
+  const labels = ['12-24H', '4-12H', '1-4H', '0-1H'];
+  const maxVal = Math.max(...data, 1);
+  const BAR_H = 36; // max bar height px
+
+  return (
+    <div>
+      <p className="text-[10px] font-black text-gray-600 uppercase tracking-widest mb-2 flex items-center gap-1.5">
+        <BarChart2 size={10} /> Activity (24H)
+      </p>
+      <div className="flex items-end gap-1" style={{ height: `${BAR_H + 28}px` }}>
+        {data.map((v, i) => {
+          const barH = Math.max(2, Math.round((v / maxVal) * BAR_H));
+          // Opacity ramps up toward the most-recent bar (rightmost)
+          const alpha = 0.3 + (i / (data.length - 1)) * 0.7;
+          const isLatest = i === data.length - 1;
+          return (
+            <div key={i} className="flex-1 flex flex-col items-center justify-end gap-0.5">
+              {/* kill count label above bar */}
+              <span
+                className="text-[8px] font-mono font-black leading-none"
+                style={{ color: v > 0 ? `rgba(249,115,22,${alpha})` : 'transparent' }}
+              >
+                {v > 0 ? v : '·'}
+              </span>
+              {/* bar */}
+              <div
+                style={{
+                  height: `${barH}px`,
+                  width: '100%',
+                  borderRadius: '2px 2px 0 0',
+                  backgroundColor: isLatest
+                    ? '#f97316'
+                    : `rgba(249,115,22,${alpha})`,
+                  boxShadow: isLatest ? '0 0 6px rgba(249,115,22,0.4)' : 'none',
+                  minHeight: '2px',
+                }}
+              />
+              {/* time label below bar */}
+              <span className="text-[7px] font-mono text-gray-700 leading-none mt-0.5">
+                {labels[i]}
+              </span>
+            </div>
+          );
+        })}
+      </div>
+    </div>
+  );
+}
+
+// Inline threat badge used in the neighborhood list.
+function ThreatBadge({ label, color }: { label: string; color: string }) {
+  const styles: Record<string, string> = {
+    red:    'bg-red-900/60 text-red-400 border-red-800/60',
+    amber:  'bg-amber-900/60 text-amber-400 border-amber-800/60',
+    violet: 'bg-violet-900/60 text-violet-400 border-violet-800/60',
+  };
+  return (
+    <span className={`text-[9px] font-black px-1.5 py-0.5 rounded border uppercase tracking-wide ${styles[color]}`}>
+      {label}
+    </span>
+  );
+}
+
 export default function App() {
   const [isLoggedIn, setIsLoggedIn] = useState(false);
   const [pilotName, setPilotName] = useState("");
@@ -52,12 +119,27 @@ export default function App() {
   const [details, setDetails] = useState<any>(null);
   const [isDetailLoading, setIsDetailLoading] = useState(false);
   const [progress, setProgress] = useState(100);
-  
+
   // Track asynchronously loaded killboard stats per system
   const [killStats, setKillStats] = useState<Record<number, {k1h: number, k24h: number, loading: boolean}>>({});
 
+  // Threat data keyed by system id: { camped, smartbombs, interdictors }
+  const [threatData, setThreatData] = useState<Record<number, { camped: boolean; smartbombs: boolean; interdictors: boolean }>>({});
+
   const scoutSystemIdRef = useRef<number | null>(null);
   const lastSpokenSystemRef = useRef<number | null>(null);
+
+  // --- Bug fixes ---
+  // (1) Keep a ref to selectedId so that the 15s interval closure always reads
+  //     the current value, not the stale one captured when the effect first ran.
+  const selectedIdRef = useRef<number | null>(null);
+  useEffect(() => { selectedIdRef.current = selectedId; }, [selectedId]);
+
+  // (2) Track which system id the in-flight details fetch was issued for, so that
+  //     a result arriving late (after the user has already switched systems) is
+  //     silently discarded rather than overwriting the correct system's data.
+  const detailsFetchIdRef = useRef<number | null>(null);
+  // -----------------
 
   useEffect(() => {
     if (scoutIntel?.current?.id) {
@@ -85,8 +167,24 @@ export default function App() {
   useEffect(() => {
     if (!displayIntel || !displayIntel.current) return;
     const systemsToFetch = [displayIntel.current.id, ...(displayIntel.connections || []).map((c: any) => c.id)];
-    systemsToFetch.forEach(id => {
-       fetchSystemStats(id);
+    systemsToFetch.forEach(id => { fetchSystemStats(id); });
+  }, [displayIntel]);
+
+  // Fetch threat intel for the current system and all its connections.
+  // Backend caches results for 600 s, so the extra HTTP hops are cheap.
+  useEffect(() => {
+    if (!displayIntel?.current) return;
+    const ids: number[] = [
+      displayIntel.current.id,
+      ...(displayIntel.connections || []).map((c: any) => c.id),
+    ];
+    ids.forEach(async (id) => {
+      try {
+        const res = await fetch(`http://127.0.0.1:8000/system/threats/${id}`);
+        if (!res.ok) return;
+        const data = await res.json();
+        setThreatData(prev => ({ ...prev, [id]: data }));
+      } catch (_) {}
     });
   }, [displayIntel]);
 
@@ -137,12 +235,21 @@ export default function App() {
   }, [searchQuery, intel]);
 
   const fetchTacticalDetails = async (id: number, force: boolean = false) => {
+    // Mark this as the authoritative fetch. Any prior in-flight fetch for a
+    // different id will see the mismatch and drop its result.
+    detailsFetchIdRef.current = id;
     if (!force) setIsDetailLoading(true);
     try {
       const res = await fetch(`http://127.0.0.1:8000/system/details/${id}${force ? '?force=true' : ''}`);
-      setDetails(await res.json());
+      const data = await res.json();
+      // Only apply the result if the user hasn't navigated away mid-flight.
+      if (detailsFetchIdRef.current === id) {
+        setDetails(data);
+      }
     } catch (e) { console.error(e); }
-    finally { setIsDetailLoading(false); }
+    finally {
+      if (detailsFetchIdRef.current === id) setIsDetailLoading(false);
+    }
   };
 
   const refreshIntel = async () => {
@@ -157,8 +264,11 @@ export default function App() {
         setScoutIntel(await scoutRes.json());
       }
 
-      if (selectedId) fetchTacticalDetails(selectedId, true);
-      if (!selectedId && liveData.current && viewMode === 'LIVE') setSelectedId(liveData.current.id);
+      // Use the ref — not the closed-over state variable — so the interval always
+      // fetches details for whichever system the user has currently selected.
+      const currentSelectedId = selectedIdRef.current;
+      if (currentSelectedId) fetchTacticalDetails(currentSelectedId, true);
+      if (!currentSelectedId && liveData.current && viewMode === 'LIVE') setSelectedId(liveData.current.id);
       setProgress(100);
     } catch (e) { console.error(e); }
   };
@@ -294,35 +404,42 @@ export default function App() {
             <div className="flex-1 bg-[#111] border border-gray-800 rounded p-4 flex flex-col overflow-hidden">
                <div className="flex items-center gap-2 mb-4 text-gray-400 border-b border-gray-800 pb-2 font-black uppercase text-sm tracking-widest"><Zap size={18} /> Neighborhood</div>
                <div className="flex-1 overflow-y-auto space-y-2 pr-2 custom-scrollbar">
-                  {displayIntel?.connections?.map((sys: any) => (
-                    <button key={sys.id} onClick={() => setSelectedId(sys.id)} className={`w-full flex items-center justify-between p-3 border rounded transition-all ${selectedId === sys.id ? 'border-blue-500 bg-blue-900/10' : 'border-gray-800 bg-black/40 hover:border-gray-700'}`}>
-                      <div className="flex items-center gap-3">
-                        <ArrowRightCircle size={22} className="text-gray-700" />
-                        <div className="text-left">
-                          <div className="flex items-center gap-2">
-                            <span className="text-[22px] font-black text-white">{sys.name}</span>
-                            <span className="font-mono font-black text-[22px]" style={{ color: getSecColor(sys.sec) }}>{sys.sec.toFixed(1)}</span>
-                            {sys.has_scout && <Wifi size={16} className="text-cyan-400 animate-pulse" />}
-                          </div>
-                          <p className="text-[12px] font-bold text-gray-600 uppercase tracking-widest">{sys.owner}</p>
-                        </div>
-                      </div>
-                      <div className="flex gap-6 font-mono font-black text-center uppercase tracking-tighter">
-                        <div>
-                          <p className="text-[12px] text-gray-600">1H PvP</p>
-                          <div className="h-6 flex items-center justify-center">
-                            {killStats[sys.id]?.loading ? <Loader2 className="animate-spin text-orange-500/50" size={20} /> : <span className="text-orange-500 text-[20px]">{killStats[sys.id]?.k1h ?? 0}</span>}
-                          </div>
-                        </div>
-                        <div>
-                          <p className="text-[12px] text-gray-600">24H PvP</p>
-                          <div className="h-6 flex items-center justify-center">
-                            {killStats[sys.id]?.loading ? <Loader2 className="animate-spin text-red-600/50" size={20} /> : <span className="text-red-600 text-[20px]">{killStats[sys.id]?.k24h ?? 0}</span>}
+                  {displayIntel?.connections?.map((sys: any) => {
+                    const threats = threatData[sys.id];
+                    return (
+                      <button key={sys.id} onClick={() => setSelectedId(sys.id)} className={`w-full flex items-center justify-between p-3 border rounded transition-all ${selectedId === sys.id ? 'border-blue-500 bg-blue-900/10' : 'border-gray-800 bg-black/40 hover:border-gray-700'}`}>
+                        <div className="flex items-center gap-3">
+                          <ArrowRightCircle size={22} className="text-gray-700" />
+                          <div className="text-left">
+                            <div className="flex items-center gap-2 flex-wrap">
+                              <span className="text-[22px] font-black text-white">{sys.name}</span>
+                              <span className="font-mono font-black text-[22px]" style={{ color: getSecColor(sys.sec) }}>{sys.sec.toFixed(1)}</span>
+                              {sys.has_scout && <Wifi size={16} className="text-cyan-400 animate-pulse" />}
+                              {/* Threat badges — only rendered once backend data arrives */}
+                              {threats?.camped      && <ThreatBadge label="CAMPED" color="red"    />}
+                              {threats?.interdictors && !threats?.camped && <ThreatBadge label="DICTOR" color="violet" />}
+                              {threats?.smartbombs  && <ThreatBadge label="SB"     color="amber"  />}
+                            </div>
+                            <p className="text-[12px] font-bold text-gray-600 uppercase tracking-widest">{sys.owner}</p>
                           </div>
                         </div>
-                      </div>
-                    </button>
-                  ))}
+                        <div className="flex gap-6 font-mono font-black text-center uppercase tracking-tighter">
+                          <div>
+                            <p className="text-[12px] text-gray-600">1H PvP</p>
+                            <div className="h-6 flex items-center justify-center">
+                              {killStats[sys.id]?.loading ? <Loader2 className="animate-spin text-orange-500/50" size={20} /> : <span className="text-orange-500 text-[20px]">{killStats[sys.id]?.k1h ?? 0}</span>}
+                            </div>
+                          </div>
+                          <div>
+                            <p className="text-[12px] text-gray-600">24H PvP</p>
+                            <div className="h-6 flex items-center justify-center">
+                              {killStats[sys.id]?.loading ? <Loader2 className="animate-spin text-red-600/50" size={20} /> : <span className="text-red-600 text-[20px]">{killStats[sys.id]?.k24h ?? 0}</span>}
+                            </div>
+                          </div>
+                        </div>
+                      </button>
+                    );
+                  })}
                </div>
             </div>
           </section>
@@ -350,6 +467,14 @@ export default function App() {
                     </div>
                   </div>
                 </div>
+
+                {/* Activity sparkline — shown when details have loaded */}
+                {details?.sparkline && (
+                  <div className="bg-black/40 border border-gray-800 rounded p-3">
+                    <ActivitySparkline data={details.sparkline} />
+                  </div>
+                )}
+
                 <div className="bg-cyan-900/10 border border-cyan-800/50 rounded p-4">
                    <p className="text-xs font-black text-cyan-400 uppercase mb-3 flex items-center gap-2"><Wifi size={14} /> EVE-Scout Intelligence</p>
                    {details?.signatures?.length > 0 ? (

@@ -24,12 +24,14 @@ ZKILL_CACHE_TTL = 600
 SOV_CACHE_TTL = 3600
 SCOUT_CACHE_TTL = 180
 TAC_CACHE_TTL = 300
+THREAT_CACHE_TTL = 600
 
 TOKEN_CACHE = {"access_token": None, "expiry": 0}
 Z_CACHE: Dict = {}
 NAME_CACHE: Dict = {}
 SOV_MAP: Dict = {}
 TAC_CACHE: Dict = {}
+THREAT_CACHE: Dict = {}
 
 SCOUT_CACHE: Dict = {"data": None, "expiry": 0}
 SOV_NAME_CACHE: Dict = {}
@@ -37,6 +39,16 @@ SOV_MAP_EXPIRY: float = 0.0
 
 SYSTEM_INDEX = []
 JUMP_GRAPH = {}
+
+# Ship type IDs for threat detection
+DICTOR_SHIP_IDS = {22456, 22464, 11174, 12013}   # Sabre, Flycatcher, Heretic, Eris
+HIC_SHIP_IDS    = {12017, 12019, 12021, 12023}   # Phobos, Devoter, Onyx, Broadsword
+# Smartbomb weapon type IDs (T1 and T2 across damage types)
+SMARTBOMB_WEAPON_IDS = {
+    16441, 16443, 16445, 16447, 16449, 16451,   # T1 smartbombs
+    28432, 28434, 28436, 28438, 28440, 28442,   # T2 smartbombs
+    41155, 41157, 41159,                         # Faction smartbombs
+}
 
 app = FastAPI()
 app.add_middleware(CORSMiddleware, allow_origins=["*"], allow_methods=["*"], allow_headers=["*"])
@@ -174,7 +186,7 @@ async def get_base_system(client, system_id: int, scout_ids: set) -> dict:
     return {"id": system_id, "name": sys_info["name"], "sec": sys_info["sec"], "owner": owner_name, "has_scout": system_id in scout_ids}
 
 async def get_stats_bundle(client, system_id):
-    """Fetch zKill stats for a system."""
+    """Fetch zKill stats for a system. Also caches the raw 1h kill list for threat analysis."""
     now = time.time()
     if system_id in Z_CACHE and Z_CACHE[system_id]["expiry"] > now:
         return Z_CACHE[system_id]["data"]
@@ -184,10 +196,17 @@ async def get_stats_bundle(client, system_id):
             client.get(f"{ZKILL_URL}/solarSystemID/{system_id}/pastSeconds/86400/")
         )
         r1, r2 = await asyncio.gather(t1, t2)
+        kills_1h = r1.json() if r1.status_code == 200 and isinstance(r1.json(), list) else []
+        kills_24h = r2.json() if r2.status_code == 200 and isinstance(r2.json(), list) else []
         data = {
             "id": system_id,
-            "k1h": len(r1.json() if r1.status_code == 200 else []),
-            "k24h": len(r2.json() if r2.status_code == 200 else []),
+            "k1h": len(kills_1h),
+            "k24h": len(kills_24h),
+            # Cache the raw kill list (id + hash only) for threat detection reuse
+            "kills_1h_raw": [
+                {"id": k.get("killmail_id"), "hash": k.get("zkb", {}).get("hash", "")}
+                for k in kills_1h if k.get("killmail_id")
+            ],
         }
         Z_CACHE[system_id] = {"data": data, "expiry": now + ZKILL_CACHE_TTL}
         return data
@@ -235,8 +254,78 @@ async def get_scout_intel(system_id: int):
 async def get_system_stats(system_id: int):
     async with httpx.AsyncClient(headers={"User-Agent": USER_AGENT}) as client:
         data = await get_stats_bundle(client, system_id)
-        if data: return data
+        if data:
+            return {"id": data["id"], "k1h": data["k1h"], "k24h": data["k24h"]}
         return {"id": system_id, "k1h": 0, "k24h": 0}
+
+@app.get("/system/threats/{system_id}")
+async def get_system_threats(system_id: int):
+    """
+    Detect threat types from recent killmail attacker ship/weapon data.
+    Reuses Z_CACHE kill list to avoid duplicate zkill calls.
+    Fetches at most 3 ESI killmails per system per cache period (600s).
+    """
+    now = time.time()
+    if system_id in THREAT_CACHE and THREAT_CACHE[system_id]["expiry"] > now:
+        return THREAT_CACHE[system_id]["data"]
+
+    threats = {"camped": False, "smartbombs": False, "interdictors": False}
+
+    async with httpx.AsyncClient(headers={"User-Agent": USER_AGENT}, timeout=15.0) as client:
+        try:
+            # Reuse the stats cache if fresh, otherwise fetch just the 1h kill list
+            cached = Z_CACHE.get(system_id)
+            if cached and cached["expiry"] > now:
+                kills_raw = cached["data"].get("kills_1h_raw", [])
+            else:
+                r = await client.get(f"{ZKILL_URL}/solarSystemID/{system_id}/pastSeconds/3600/")
+                if r.status_code == 200 and isinstance(r.json(), list):
+                    raw = r.json()
+                    kills_raw = [
+                        {"id": k.get("killmail_id"), "hash": k.get("zkb", {}).get("hash", "")}
+                        for k in raw if k.get("killmail_id")
+                    ]
+                    # Opportunistically update Z_CACHE count if not already cached
+                    if system_id not in Z_CACHE or Z_CACHE[system_id]["expiry"] <= now:
+                        Z_CACHE[system_id] = {
+                            "data": {"id": system_id, "k1h": len(raw), "k24h": Z_CACHE.get(system_id, {}).get("data", {}).get("k24h", 0), "kills_1h_raw": kills_raw},
+                            "expiry": now + ZKILL_CACHE_TTL,
+                        }
+                else:
+                    kills_raw = []
+
+            if not kills_raw:
+                THREAT_CACHE[system_id] = {"data": threats, "expiry": now + THREAT_CACHE_TTL}
+                return threats
+
+            # Fetch up to 3 full ESI killmails to inspect attacker ship/weapon types
+            to_fetch = [km for km in kills_raw if km["id"] and km["hash"]][:3]
+            esi_tasks = [client.get(f"{ESI_URL}/killmails/{km['id']}/{km['hash']}/") for km in to_fetch]
+            results = await asyncio.gather(*esi_tasks, return_exceptions=True)
+
+            for res in results:
+                if isinstance(res, Exception) or res.status_code != 200:
+                    continue
+                try:
+                    km_data = res.json()
+                except Exception:
+                    continue
+                for attacker in km_data.get("attackers", []):
+                    ship_id   = attacker.get("ship_type_id", 0)
+                    weapon_id = attacker.get("weapon_type_id", 0)
+                    if ship_id in DICTOR_SHIP_IDS:
+                        threats["interdictors"] = True
+                        threats["camped"] = True
+                    if ship_id in HIC_SHIP_IDS:
+                        threats["camped"] = True
+                    if weapon_id in SMARTBOMB_WEAPON_IDS:
+                        threats["smartbombs"] = True
+
+        except Exception as e:
+            logging.error(f"Threat detection error for system {system_id}: {e}")
+
+    THREAT_CACHE[system_id] = {"data": threats, "expiry": now + THREAT_CACHE_TTL}
+    return threats
 
 @app.get("/system/details/{system_id}")
 async def get_tactical_details(system_id: int, force: bool = False):
@@ -245,11 +334,16 @@ async def get_tactical_details(system_id: int, force: bool = False):
         return TAC_CACHE[system_id]["data"]
     async with httpx.AsyncClient(headers={"User-Agent": USER_AGENT}) as client:
         try:
-            t2, t3 = (
+            # Fetch ESI activity data + zkill windows for sparkline concurrently.
+            # We already have k1h/k24h in Z_CACHE; fetch 4h and 12h windows for the
+            # sparkline (2 extra zkill calls, cached in TAC_CACHE for TAC_CACHE_TTL).
+            t_sys_kills, t_sys_jumps, t_z4h, t_z12h = (
                 client.get(f"{ESI_URL}/universe/system_kills/"),
-                client.get(f"{ESI_URL}/universe/system_jumps/")
+                client.get(f"{ESI_URL}/universe/system_jumps/"),
+                client.get(f"{ZKILL_URL}/solarSystemID/{system_id}/pastSeconds/14400/"),
+                client.get(f"{ZKILL_URL}/solarSystemID/{system_id}/pastSeconds/43200/"),
             )
-            r2, r3 = await asyncio.gather(t2, t3)
+            r_sys_kills, r_sys_jumps, r_z4h, r_z12h = await asyncio.gather(t_sys_kills, t_sys_jumps, t_z4h, t_z12h)
 
             scout_data = await get_scout_data(client)
             sigs = []
@@ -271,18 +365,35 @@ async def get_tactical_details(system_id: int, force: bool = False):
                         except Exception: pass
                     sigs.append({"id": sig_id, "target": target, "remaining": remaining})
 
-            k_data = next((s for s in r2.json() if s['system_id'] == system_id), {})
-            j_data = next((s for s in r3.json() if s['system_id'] == system_id), {})
+            k_data = next((s for s in r_sys_kills.json() if s['system_id'] == system_id), {})
+            j_data = next((s for s in r_sys_jumps.json() if s['system_id'] == system_id), {})
+
+            # Build sparkline: 4 buckets ordered oldest→newest
+            # [12-24h kills, 4-12h kills, 1-4h kills, 0-1h kills]
+            zcache = Z_CACHE.get(system_id, {}).get("data", {})
+            k1h  = zcache.get("k1h", 0)
+            k24h = zcache.get("k24h", 0)
+            k4h  = len(r_z4h.json())  if r_z4h.status_code  == 200 and isinstance(r_z4h.json(),  list) else k1h
+            k12h = len(r_z12h.json()) if r_z12h.status_code == 200 and isinstance(r_z12h.json(), list) else k4h
+            sparkline = [
+                max(0, k24h - k12h),   # 12–24h ago
+                max(0, k12h - k4h),    # 4–12h ago
+                max(0, k4h  - k1h),    # 1–4h ago
+                k1h,                   # last hour
+            ]
+
             data = {
                 "npc_kills_1h": k_data.get("npc_kills", 0),
                 "jumps_1h": j_data.get("ship_jumps", 0),
                 "camps": [],
-                "signatures": sigs
+                "signatures": sigs,
+                "sparkline": sparkline,
             }
             TAC_CACHE[system_id] = {"data": data, "expiry": now + TAC_CACHE_TTL}
             return data
-        except:
-            return {"npc_kills_1h": 0, "jumps_1h": 0, "camps": [], "signatures": []}
+        except Exception as e:
+            logging.error(f"Details error for {system_id}: {e}")
+            return {"npc_kills_1h": 0, "jumps_1h": 0, "camps": [], "signatures": [], "sparkline": None}
 
 @app.post("/logout")
 async def logout():
