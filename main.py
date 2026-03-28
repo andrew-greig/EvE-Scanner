@@ -20,9 +20,9 @@ USER_AGENT = "EVE-Intel-Tactical-Scanner-v1"
 
 SDE_ZIP_URL = "https://developers.eveonline.com/static-data/eve-online-static-data-latest-jsonl.zip"
 
-ZKILL_CACHE_TTL = 600
+ZKILL_CACHE_TTL = 300
 SOV_CACHE_TTL = 3600
-SCOUT_CACHE_TTL = 180
+SCOUT_CACHE_TTL = 600
 TAC_CACHE_TTL = 300
 THREAT_CACHE_TTL = 600
 
@@ -39,6 +39,15 @@ SOV_MAP_EXPIRY: float = 0.0
 
 SYSTEM_INDEX = []
 JUMP_GRAPH = {}
+# Keyed by solar system id → list of gates in that system.
+# Each gate: {"to_sys_id": int, "x": float, "y": float, "z": float}
+# Positions are in metres (EVE SDE convention).
+GATE_DATA: Dict[int, List[Dict]] = {}
+
+# Kills within this distance of a gate structure are treated as gate-camp kills.
+# 5 × 10^5 m = 500 km — generous enough to cover any realistic gate-camp radius
+# while still excluding ratting / station kills on the other side of the system.
+GATE_CAMP_DIST_M: float = 5e5
 
 # Ship type IDs for threat detection
 DICTOR_SHIP_IDS = {22456, 22464, 11174, 12013}   # Sabre, Flycatcher, Heretic, Eris
@@ -145,6 +154,14 @@ async def startup_event():
                     fid, tid = int(fid), int(tid)
                     if fid not in JUMP_GRAPH: JUMP_GRAPH[fid] = []
                     JUMP_GRAPH[fid].append(tid)
+                    # Store gate position for gate-camp detection.
+                    # SDE encodes position as a nested dict {"x":…,"y":…,"z":…}.
+                    pos = g.get("position", {})
+                    gx = float(pos.get("x", 0))
+                    gy = float(pos.get("y", 0))
+                    gz = float(pos.get("z", 0))
+                    if fid not in GATE_DATA: GATE_DATA[fid] = []
+                    GATE_DATA[fid].append({"to_sys_id": tid, "x": gx, "y": gy, "z": gz})
 
         except Exception as e:
             logging.error(f"SDE Setup Failed: {e}")
@@ -261,19 +278,32 @@ async def get_system_stats(system_id: int):
 @app.get("/system/threats/{system_id}")
 async def get_system_threats(system_id: int):
     """
-    Detect threat types from recent killmail attacker ship/weapon data.
-    Reuses Z_CACHE kill list to avoid duplicate zkill calls.
-    Fetches at most 3 ESI killmails per system per cache period (600s).
+    Detect gate camps (by kill position proximity to gate structures),
+    interdictors, and smartbombs from the last hour of kills.
+
+    Gate camp logic:
+      - Fetch up to 10 recent ESI killmails for the system.
+      - Each killmail includes the kill position (x, y, z) in metres.
+      - Compare that position to every stargate in GATE_DATA[system_id].
+      - Kills within GATE_CAMP_DIST_M (~500 km) of a gate count toward
+        a camp on that gate.  Two or more kills near the same gate = CAMPED.
+      - Returns camped_gates: list of {to_sys_id, to_sys_name, kill_count}.
+
+    Attacker-ship / weapon analysis runs over the same killmails with no
+    extra API calls, giving us DICTOR and SB flags for free.
+
+    All results are cached for THREAT_CACHE_TTL (600 s) and the raw 1-hour
+    kill list is re-used from Z_CACHE whenever it is still fresh.
     """
     now = time.time()
     if system_id in THREAT_CACHE and THREAT_CACHE[system_id]["expiry"] > now:
         return THREAT_CACHE[system_id]["data"]
 
-    threats = {"camped": False, "smartbombs": False, "interdictors": False}
+    result = {"camped_gates": [], "smartbombs": False, "interdictors": False, "camped": False}
 
     async with httpx.AsyncClient(headers={"User-Agent": USER_AGENT}, timeout=15.0) as client:
         try:
-            # Reuse the stats cache if fresh, otherwise fetch just the 1h kill list
+            # --- Step 1: get 1-hour kill list (reuse Z_CACHE if fresh) ---
             cached = Z_CACHE.get(system_id)
             if cached and cached["expiry"] > now:
                 kills_raw = cached["data"].get("kills_1h_raw", [])
@@ -285,47 +315,90 @@ async def get_system_threats(system_id: int):
                         {"id": k.get("killmail_id"), "hash": k.get("zkb", {}).get("hash", "")}
                         for k in raw if k.get("killmail_id")
                     ]
-                    # Opportunistically update Z_CACHE count if not already cached
                     if system_id not in Z_CACHE or Z_CACHE[system_id]["expiry"] <= now:
                         Z_CACHE[system_id] = {
-                            "data": {"id": system_id, "k1h": len(raw), "k24h": Z_CACHE.get(system_id, {}).get("data", {}).get("k24h", 0), "kills_1h_raw": kills_raw},
+                            "data": {
+                                "id": system_id,
+                                "k1h": len(raw),
+                                "k24h": Z_CACHE.get(system_id, {}).get("data", {}).get("k24h", 0),
+                                "kills_1h_raw": kills_raw,
+                            },
                             "expiry": now + ZKILL_CACHE_TTL,
                         }
                 else:
                     kills_raw = []
 
             if not kills_raw:
-                THREAT_CACHE[system_id] = {"data": threats, "expiry": now + THREAT_CACHE_TTL}
-                return threats
+                THREAT_CACHE[system_id] = {"data": result, "expiry": now + THREAT_CACHE_TTL}
+                return result
 
-            # Fetch up to 3 full ESI killmails to inspect attacker ship/weapon types
-            to_fetch = [km for km in kills_raw if km["id"] and km["hash"]][:3]
-            esi_tasks = [client.get(f"{ESI_URL}/killmails/{km['id']}/{km['hash']}/") for km in to_fetch]
-            results = await asyncio.gather(*esi_tasks, return_exceptions=True)
+            # --- Step 2: fetch up to 10 full ESI killmails concurrently ---
+            to_fetch = [km for km in kills_raw if km.get("id") and km.get("hash")][:10]
+            esi_results = await asyncio.gather(
+                *[client.get(f"{ESI_URL}/killmails/{km['id']}/{km['hash']}/") for km in to_fetch],
+                return_exceptions=True,
+            )
 
-            for res in results:
+            # --- Step 3: analyse each killmail ---
+            gates = GATE_DATA.get(system_id, [])
+            # kill_count_by_gate[to_sys_id] = number of kills within threshold
+            kill_count_by_gate: Dict[int, int] = {}
+
+            for res in esi_results:
                 if isinstance(res, Exception) or res.status_code != 200:
                     continue
                 try:
-                    km_data = res.json()
+                    km = res.json()
                 except Exception:
                     continue
-                for attacker in km_data.get("attackers", []):
+
+                # -- Position-based gate proximity check --
+                pos = km.get("position", {})
+                kx = float(pos.get("x", 0))
+                ky = float(pos.get("y", 0))
+                kz = float(pos.get("z", 0))
+                # Only run the check if we actually got a non-zero position.
+                if kx != 0 or ky != 0 or kz != 0:
+                    for gate in gates:
+                        dist = math.sqrt(
+                            (kx - gate["x"]) ** 2 +
+                            (ky - gate["y"]) ** 2 +
+                            (kz - gate["z"]) ** 2
+                        )
+                        if dist <= GATE_CAMP_DIST_M:
+                            tid = gate["to_sys_id"]
+                            kill_count_by_gate[tid] = kill_count_by_gate.get(tid, 0) + 1
+                            break  # one kill can only be near one gate
+
+                # -- Attacker ship / weapon type check --
+                for attacker in km.get("attackers", []):
                     ship_id   = attacker.get("ship_type_id", 0)
                     weapon_id = attacker.get("weapon_type_id", 0)
                     if ship_id in DICTOR_SHIP_IDS:
-                        threats["interdictors"] = True
-                        threats["camped"] = True
-                    if ship_id in HIC_SHIP_IDS:
-                        threats["camped"] = True
+                        result["interdictors"] = True
                     if weapon_id in SMARTBOMB_WEAPON_IDS:
-                        threats["smartbombs"] = True
+                        result["smartbombs"] = True
+
+            # --- Step 4: build camped_gates list ---
+            # Require ≥2 kills near the same gate to flag it as camped — a single
+            # kill could be coincidental (e.g. a solo hunter).
+            CAMP_KILL_THRESHOLD = 2
+            for to_sys_id, count in kill_count_by_gate.items():
+                if count >= CAMP_KILL_THRESHOLD:
+                    to_name = NAME_CACHE.get(to_sys_id, f"ID:{to_sys_id}")
+                    result["camped_gates"].append({
+                        "to_sys_id":   to_sys_id,
+                        "to_sys_name": to_name,
+                        "kill_count":  count,
+                    })
+
+            result["camped"] = len(result["camped_gates"]) > 0
 
         except Exception as e:
             logging.error(f"Threat detection error for system {system_id}: {e}")
 
-    THREAT_CACHE[system_id] = {"data": threats, "expiry": now + THREAT_CACHE_TTL}
-    return threats
+    THREAT_CACHE[system_id] = {"data": result, "expiry": now + THREAT_CACHE_TTL}
+    return result
 
 @app.get("/system/details/{system_id}")
 async def get_tactical_details(system_id: int, force: bool = False):

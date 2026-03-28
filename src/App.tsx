@@ -123,8 +123,13 @@ export default function App() {
   // Track asynchronously loaded killboard stats per system
   const [killStats, setKillStats] = useState<Record<number, {k1h: number, k24h: number, loading: boolean}>>({});
 
-  // Threat data keyed by system id: { camped, smartbombs, interdictors }
-  const [threatData, setThreatData] = useState<Record<number, { camped: boolean; smartbombs: boolean; interdictors: boolean }>>({});
+  // Threat data keyed by system id
+  const [threatData, setThreatData] = useState<Record<number, {
+    camped: boolean;
+    camped_gates: { to_sys_id: number; to_sys_name: string; kill_count: number }[];
+    smartbombs: boolean;
+    interdictors: boolean;
+  }>>({});
 
   const scoutSystemIdRef = useRef<number | null>(null);
   const lastSpokenSystemRef = useRef<number | null>(null);
@@ -415,10 +420,15 @@ export default function App() {
                               <span className="text-[22px] font-black text-white">{sys.name}</span>
                               <span className="font-mono font-black text-[22px]" style={{ color: getSecColor(sys.sec) }}>{sys.sec.toFixed(1)}</span>
                               {sys.has_scout && <Wifi size={16} className="text-cyan-400 animate-pulse" />}
-                              {/* Threat badges — only rendered once backend data arrives */}
-                              {threats?.camped      && <ThreatBadge label="CAMPED" color="red"    />}
-                              {threats?.interdictors && !threats?.camped && <ThreatBadge label="DICTOR" color="violet" />}
-                              {threats?.smartbombs  && <ThreatBadge label="SB"     color="amber"  />}
+                              {/* Per-gate camp badges — one badge per camped gate showing destination */}
+                              {threats?.camped_gates?.map(g => (
+                                <ThreatBadge key={g.to_sys_id} label={`⚑ →${g.to_sys_name}`} color="red" />
+                              ))}
+                              {/* Interdictor present but no confirmed gate camp position */}
+                              {threats?.interdictors && !threats?.camped && (
+                                <ThreatBadge label="DICTOR" color="violet" />
+                              )}
+                              {threats?.smartbombs && <ThreatBadge label="SB" color="amber" />}
                             </div>
                             <p className="text-[12px] font-bold text-gray-600 uppercase tracking-widest">{sys.owner}</p>
                           </div>
