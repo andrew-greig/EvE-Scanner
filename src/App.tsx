@@ -106,6 +106,12 @@ function ThreatBadge({ label, color }: { label: string; color: string }) {
   );
 }
 
+// How long (ms) the frontend will trust its own cached data before re-fetching.
+// Set slightly under the backend TTLs (300s for stats, 600s for threats) so we
+// never serve stale data while still avoiding redundant HTTP round-trips.
+const STATS_CLIENT_TTL_MS  = 270_000; // 270 s  (backend Z_CACHE TTL = 300 s)
+const THREAT_CLIENT_TTL_MS = 570_000; // 570 s  (backend THREAT_CACHE TTL = 600 s)
+
 export default function App() {
   const [isLoggedIn, setIsLoggedIn] = useState(false);
   const [pilotName, setPilotName] = useState("");
@@ -146,6 +152,12 @@ export default function App() {
   const detailsFetchIdRef = useRef<number | null>(null);
   // -----------------
 
+  // Client-side fetch timestamps — keyed by system id.
+  // Using refs (not state) so reads inside async callbacks are always current
+  // without triggering re-renders or stale-closure issues.
+  const statsFetchedAtRef  = useRef<Record<number, number>>({});
+  const threatFetchedAtRef = useRef<Record<number, number>>({});
+
   useEffect(() => {
     if (scoutIntel?.current?.id) {
       scoutSystemIdRef.current = scoutIntel.current.id;
@@ -159,6 +171,16 @@ export default function App() {
   const isCurrentSystemSelected = displayIntel?.current?.id === selectedId;
 
   const fetchSystemStats = async (id: number) => {
+    // Skip the HTTP call if the frontend data is still within its TTL.
+    // The backend Z_CACHE will also be a hit in this window, but avoiding
+    // the round-trip entirely stops the console spam.
+    const lastFetched = statsFetchedAtRef.current[id] ?? 0;
+    if (Date.now() - lastFetched < STATS_CLIENT_TTL_MS) return;
+
+    // Stamp immediately so concurrent calls for the same id (e.g. stats effect
+    // firing while a manual refresh is in-flight) don't both proceed.
+    statsFetchedAtRef.current[id] = Date.now();
+
     setKillStats(prev => ({ ...prev, [id]: { ...(prev[id] || { k1h: 0, k24h: 0 }), loading: true } }));
     try {
       const res = await fetch(`http://127.0.0.1:8000/system/stats/${id}`);
@@ -166,6 +188,8 @@ export default function App() {
       setKillStats(prev => ({ ...prev, [id]: { k1h: data.k1h, k24h: data.k24h, loading: false } }));
     } catch (e) {
       setKillStats(prev => ({ ...prev, [id]: { ...(prev[id] || { k1h: 0, k24h: 0 }), loading: false } }));
+      // Reset timestamp on failure so a retry is allowed on the next cycle.
+      statsFetchedAtRef.current[id] = 0;
     }
   };
 
@@ -176,7 +200,8 @@ export default function App() {
   }, [displayIntel]);
 
   // Fetch threat intel for the current system and all its connections.
-  // Backend caches results for 600 s, so the extra HTTP hops are cheap.
+  // Backend caches results for 600 s — the client-side TTL guard below prevents
+  // redundant HTTP round-trips on every 15 s poll cycle.
   useEffect(() => {
     if (!displayIntel?.current) return;
     const ids: number[] = [
@@ -184,12 +209,23 @@ export default function App() {
       ...(displayIntel.connections || []).map((c: any) => c.id),
     ];
     ids.forEach(async (id) => {
+      // Skip if client-side data is still fresh.
+      const lastFetched = threatFetchedAtRef.current[id] ?? 0;
+      if (Date.now() - lastFetched < THREAT_CLIENT_TTL_MS) return;
+
+      threatFetchedAtRef.current[id] = Date.now();
+
       try {
         const res = await fetch(`http://127.0.0.1:8000/system/threats/${id}`);
-        if (!res.ok) return;
+        if (!res.ok) {
+          threatFetchedAtRef.current[id] = 0; // allow retry on next cycle
+          return;
+        }
         const data = await res.json();
         setThreatData(prev => ({ ...prev, [id]: data }));
-      } catch (_) {}
+      } catch (_) {
+        threatFetchedAtRef.current[id] = 0; // allow retry on next cycle
+      }
     });
   }, [displayIntel]);
 
@@ -271,8 +307,10 @@ export default function App() {
 
       // Use the ref — not the closed-over state variable — so the interval always
       // fetches details for whichever system the user has currently selected.
+      // Note: force=true is intentionally only passed from the manual refresh
+      // button (RefreshCcw) so the automatic poll respects TAC_CACHE on the backend.
       const currentSelectedId = selectedIdRef.current;
-      if (currentSelectedId) fetchTacticalDetails(currentSelectedId, true);
+      if (currentSelectedId) fetchTacticalDetails(currentSelectedId);
       if (!currentSelectedId && liveData.current && viewMode === 'LIVE') setSelectedId(liveData.current.id);
       setProgress(100);
     } catch (e) { console.error(e); }
