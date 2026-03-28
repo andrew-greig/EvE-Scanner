@@ -275,6 +275,45 @@ async def get_system_stats(system_id: int):
             return {"id": data["id"], "k1h": data["k1h"], "k24h": data["k24h"]}
         return {"id": system_id, "k1h": 0, "k24h": 0}
 
+# ---------------------------------------------------------------------------
+# Legacy /system/path endpoint
+# ---------------------------------------------------------------------------
+# Historically the frontend expected a `/system/path/{system_id}` route that
+# returned the current system and its directly connected neighbours. The
+# implementation was accidentally removed during a refactor, resulting in a
+# 404 error when the client attempted to fetch it. This lightweight endpoint
+# re‑introduces the original behaviour by delegating to the existing
+# `get_base_system` helper.
+
+@app.get("/system/path/{system_id}")
+async def get_system_path(system_id: int):
+    """Return the current system and its immediate connections.
+
+    The response structure mirrors the legacy API used by the frontend:
+
+    .. code-block:: json
+
+        {
+            "current": { ... },
+            "connections": [ {...}, ... ]
+        }
+
+    Parameters
+    ----------
+    system_id: int
+        The solar system ID to query.
+    """
+    async with httpx.AsyncClient(headers={"User-Agent": USER_AGENT}) as client:
+        # Fetch base info for the requested system
+        scout_data = await get_scout_data(client)
+        scout_ids = {s.get("in_system_id") for s in scout_data} | {s.get("out_system_id") for s in scout_data}
+        current = await get_base_system(client, system_id, scout_ids)
+        # Retrieve neighbours via the jump graph
+        connections = await asyncio.gather(
+            *[get_base_system(client, did, scout_ids) for did in JUMP_GRAPH.get(system_id, [])]
+        )
+        return {"current": current, "connections": [c for c in connections if c]}
+
 @app.get("/system/threats/{system_id}")
 async def get_system_threats(system_id: int):
     """
