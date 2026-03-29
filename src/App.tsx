@@ -1,7 +1,7 @@
 // App.tsx
 import React, { useEffect, useState, useRef } from 'react';
 import LocalParser from './components/LocalParser';
-import { Crosshair, Zap, ArrowRightCircle, LogOut, Info, RefreshCcw, Wifi, Search, Loader2, BarChart2 } from 'lucide-react';
+import { Crosshair, Zap, ArrowRightCircle, LogOut, Info, RefreshCcw, Wifi, Search, Loader2, BarChart2, Volume2, VolumeX } from 'lucide-react';
 
 const getSecColor = (sec: number) => {
   if (sec >= 1.0) return '#2FEFEF';
@@ -13,6 +13,8 @@ const getSecColor = (sec: number) => {
 
 function speakIntel(currentStats: any, connectionsStats: any[]) {
   if (!window.speechSynthesis) return;
+  // Respect mute toggle
+  if (muteRef.current) return;
 
   const lines: string[] = [];
 
@@ -125,6 +127,12 @@ export default function App() {
   const [details, setDetails] = useState<any>(null);
   const [isDetailLoading, setIsDetailLoading] = useState(false);
   const [progress, setProgress] = useState(100);
+  // Mute toggle for TTS
+  const [isMuted, setIsMuted] = useState(false);
+  const muteRef = useRef(isMuted);
+  useEffect(() => {
+    muteRef.current = isMuted;
+  }, [isMuted]);
 
   // Track asynchronously loaded killboard stats per system
   const [killStats, setKillStats] = useState<Record<number, {k1h: number, k24h: number, loading: boolean}>>({});
@@ -380,6 +388,10 @@ export default function App() {
         <div className="flex items-center gap-4">
            <div className="w-32 h-1 bg-gray-900 rounded overflow-hidden border border-gray-800"><div className="h-full bg-blue-600 transition-all duration-1000" style={{ width: isLoggedIn ? `${progress}%` : '0%' }} /></div>
            {isLoggedIn && <button onClick={handleLogout} className="text-gray-600 hover:text-red-500 transition-colors ml-2 flex items-center gap-2 text-[10px] font-black uppercase tracking-widest"><LogOut size={14} /> Log Out</button>}
+           {/* Mute toggle button */}
+            <button onClick={() => setIsMuted(!isMuted)} className="ml-2 flex items-center justify-center rounded-full p-1 text-gray-400 hover:text-white transition-colors" title={isMuted ? "Unmute TTS" : "Mute TTS"}>
+              {isMuted ? <VolumeX size={16} /> : <Volume2 size={16} />}  
+            </button>
            {!isLoggedIn && (
              <button onClick={() => window.location.href = "http://127.0.0.1:8000/login"} className="ml-2 hover:opacity-80 transition-opacity">
                <img src="https://web.ccpgamescdn.com/eveonlineassets/developers/eve-sso-login-black-small.png" alt="Log in with EVE Online" className="h-6" />
