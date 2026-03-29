@@ -11,10 +11,11 @@ const getSecColor = (sec: number) => {
   return '#EF0000';
 };
 
-function speakIntel(currentStats: any, connectionsStats: any[]) {
+// Updated to accept mute flag instead of relying on a ref defined later.
+function speakIntel(currentStats: any, connectionsStats: any[], isMuted: boolean) {
   if (!window.speechSynthesis) return;
-  // Respect mute toggle
-  if (muteRef.current) return;
+  // Respect mute toggle passed as argument
+  if (isMuted) return;
 
   const lines: string[] = [];
 
@@ -248,7 +249,7 @@ export default function App() {
       lastSpokenSystemRef.current = currId;
       const curStats = killStats[currId];
       const connStats = displayIntel.connections.map((c: any) => ({ name: c.name, k1h: killStats[c.id]?.k1h || 0 }));
-      speakIntel(curStats, connStats);
+      speakIntel(curStats, connStats, isMuted);
     }
   }, [killStats, displayIntel]);
 
