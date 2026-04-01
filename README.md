@@ -147,4 +147,4 @@ On first startup, the backend downloads the EVE Online Static Data Export (~50MB
 
 ## License
 
-This project is not affiliated with or endorsed by CCP hf. EVE Online is a registered trademark of CCP hf.
+This project is not affiliated with or endorsed by CCP. EVE Online is a registered trademark of CCP.
