@@ -8,7 +8,7 @@ A high-performance, real-time intelligence dashboard for EVE Online pilots. This
 - **Neighborhood Intelligence** — Instantly view PvP activity (1h/24h) for all adjacent star systems.
 - **Scout Mode** — Search and "remote scan" any system in New Eden without being physically present.
 - **Tactical Overview** — Deep-dive into NPC kills, ship jumps, and active wormhole signatures.
-- **Threat Detection** — Detect gate camps (via kill proximity to stargates), interdictor ships, and smartbomb usage from the last hour of kills.
+- **Threat Detection** — Detect gate camps (via kill proximity to stargates), interdictor ships, heavy interdictors (HICs), and smartbomb usage from the last hour of kills.
 - **Local Chat Parser** — Scan local chat (Ctrl+A, Ctrl+C) to identify pilot danger ratios, security status, and alliance affiliations.
 - **Optimized Caching** — TTL-based in-memory caching for Eve-Scout, zKillboard, and sovereignty data to prevent API rate-limiting.
 - **Automatic SDE Setup** — Downloads and extracts CCP Static Data Export on first boot.

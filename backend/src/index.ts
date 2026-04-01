@@ -90,6 +90,7 @@ interface ThreatResult {
   camped_gates: Array<{ to_sys_id: number; to_sys_name: string; kill_count: number }>;
   smartbombs: boolean;
   interdictors: boolean;
+  hictors: boolean;
   camped: boolean;
 }
 
@@ -116,6 +117,10 @@ const JUMP_GRAPH: Record<number, number[]> = {};
 const GATE_DATA: Record<number, GateData[]> = {};
 
 let scoutCache: { data: any[] | null; expiry: number } = { data: null, expiry: 0 };
+
+function buildAuthHeader(): string {
+  return Buffer.from(`${CLIENT_ID}:${SECRET_KEY}`).toString('base64');
+}
 
 // ---------------------------------------------------------------------------
 // Shared HTTPS agent with keep-alive to prevent ECONNRESET
@@ -159,7 +164,7 @@ function createClient(timeout = 15000): AxiosInstance {
 // Helper functions
 // ---------------------------------------------------------------------------
 
-async function getSoutData(client: AxiosInstance): Promise<any[]> {
+async function getScoutData(client: AxiosInstance): Promise<any[]> {
   const now = Date.now() / 1000;
   if (scoutCache.data !== null && scoutCache.expiry > now) {
     return scoutCache.data;
@@ -236,7 +241,7 @@ async function getValidToken(client: AxiosInstance, user: any): Promise<string> 
     return TOKEN_CACHE.access_token!;
   }
 
-  const authHeader = Buffer.from(`${CLIENT_ID}:${SECRET_KEY}`).toString('base64');
+  const authHeader = buildAuthHeader();
   const res = await client.post(
     'https://login.eveonline.com/v2/oauth/token',
     new URLSearchParams({
@@ -317,6 +322,26 @@ async function getStatsBundle(
   } catch {
     return null;
   }
+}
+
+async function getSystemWithConnections(
+  client: AxiosInstance,
+  systemId: number
+): Promise<{ current: any; connections: any[] }> {
+  const scoutData = await getScoutData(client);
+  const scoutIds = new Set<number>();
+  for (const s of scoutData) {
+    if (s.in_system_id) scoutIds.add(s.in_system_id);
+    if (s.out_system_id) scoutIds.add(s.out_system_id);
+  }
+
+  const current = await getBaseSystem(client, systemId, scoutIds);
+  const connectionsPromises = (JUMP_GRAPH[systemId] || []).map((did) =>
+    getBaseSystem(client, did, scoutIds)
+  );
+  const connections = (await Promise.all(connectionsPromises)).filter(Boolean);
+
+  return { current, connections };
 }
 
 // ---------------------------------------------------------------------------
@@ -442,22 +467,15 @@ app.get('/user/location', async (req: Request, res: Response) => {
     );
     const currId = locRes.data.solar_system_id;
 
-    const scoutData = await getSoutData(client);
-    const scoutIds = new Set<number>();
-    for (const s of scoutData) {
-      if (s.in_system_id) scoutIds.add(s.in_system_id);
-      if (s.out_system_id) scoutIds.add(s.out_system_id);
-    }
-
-    const current = await getBaseSystem(client, currId, scoutIds);
-    const connectionsPromises = (JUMP_GRAPH[currId] || []).map((did) =>
-      getBaseSystem(client, did, scoutIds)
-    );
-    const connections = (await Promise.all(connectionsPromises)).filter(Boolean);
+    const { current, connections } = await getSystemWithConnections(client, currId);
 
     res.json({ current, connections });
   } catch (err: any) {
-    res.status(500).json({ error: err.message });
+    console.error(`/user/location error: ${err.message}`);
+    if (err.response) {
+      console.error(`  Status: ${err.response.status}, Data: ${JSON.stringify(err.response.data)}`);
+    }
+    res.status(500).json({ error: 'Failed to fetch location', detail: err.message });
   }
 });
 
@@ -466,18 +484,7 @@ app.get('/system/scout/:system_id', async (req: Request, res: Response) => {
     const { system_id } = SystemIdParamSchema.parse(req.params);
     const client = createClient();
 
-    const scoutData = await getSoutData(client);
-    const scoutIds = new Set<number>();
-    for (const s of scoutData) {
-      if (s.in_system_id) scoutIds.add(s.in_system_id);
-      if (s.out_system_id) scoutIds.add(s.out_system_id);
-    }
-
-    const current = await getBaseSystem(client, system_id, scoutIds);
-    const connectionsPromises = (JUMP_GRAPH[system_id] || []).map((did) =>
-      getBaseSystem(client, did, scoutIds)
-    );
-    const connections = (await Promise.all(connectionsPromises)).filter(Boolean);
+    const { current, connections } = await getSystemWithConnections(client, system_id);
 
     res.json({ current, connections });
   } catch (err: any) {
@@ -506,18 +513,7 @@ app.get('/system/path/:system_id', async (req: Request, res: Response) => {
     const { system_id } = SystemIdParamSchema.parse(req.params);
     const client = createClient();
 
-    const scoutData = await getSoutData(client);
-    const scoutIds = new Set<number>();
-    for (const s of scoutData) {
-      if (s.in_system_id) scoutIds.add(s.in_system_id);
-      if (s.out_system_id) scoutIds.add(s.out_system_id);
-    }
-
-    const current = await getBaseSystem(client, system_id, scoutIds);
-    const connectionsPromises = (JUMP_GRAPH[system_id] || []).map((did) =>
-      getBaseSystem(client, did, scoutIds)
-    );
-    const connections = (await Promise.all(connectionsPromises)).filter(Boolean);
+    const { current, connections } = await getSystemWithConnections(client, system_id);
 
     res.json({ current, connections });
   } catch (err: any) {
@@ -526,17 +522,18 @@ app.get('/system/path/:system_id', async (req: Request, res: Response) => {
 });
 
 app.get('/system/threats/:system_id', async (req: Request, res: Response) => {
-  const systemId = parseInt(req.params.system_id as string, 10);
+  const { system_id } = SystemIdParamSchema.parse(req.params);
   const now = Date.now() / 1000;
 
-  if (THREAT_CACHE[systemId] && THREAT_CACHE[systemId].expiry > now) {
-    return res.json(THREAT_CACHE[systemId].data);
+  if (THREAT_CACHE[system_id] && THREAT_CACHE[system_id].expiry > now) {
+    return res.json(THREAT_CACHE[system_id].data);
   }
 
   const result: ThreatResult = {
     camped_gates: [],
     smartbombs: false,
     interdictors: false,
+    hictors: false,
     camped: false,
   };
 
@@ -544,11 +541,11 @@ app.get('/system/threats/:system_id', async (req: Request, res: Response) => {
     const client = createClient(15000);
 
     let killsRaw: Array<{ id: number | undefined; hash: string }> = [];
-    const cached = Z_CACHE[systemId];
+    const cached = Z_CACHE[system_id];
     if (cached && cached.expiry > now) {
       killsRaw = cached.data.kills_1h_raw || [];
     } else {
-      const r = await client.get(`${ZKILL_URL}/solarSystemID/${systemId}/pastSeconds/3600/`);
+      const r = await client.get(`${ZKILL_URL}/solarSystemID/${system_id}/pastSeconds/3600/`);
       if (r.status === 200 && Array.isArray(r.data)) {
         killsRaw = r.data
           .filter((k: any) => k.killmail_id)
@@ -557,12 +554,12 @@ app.get('/system/threats/:system_id', async (req: Request, res: Response) => {
             hash: k.zkb?.hash || '',
           }));
 
-        if (!Z_CACHE[systemId] || Z_CACHE[systemId].expiry <= now) {
-          Z_CACHE[systemId] = {
+        if (!Z_CACHE[system_id] || Z_CACHE[system_id].expiry <= now) {
+          Z_CACHE[system_id] = {
             data: {
-              id: systemId,
+              id: system_id,
               k1h: r.data.length,
-              k24h: Z_CACHE[systemId]?.data?.k24h || 0,
+              k24h: Z_CACHE[system_id]?.data?.k24h || 0,
               kills_1h_raw: killsRaw,
             },
             expiry: now + ZKILL_CACHE_TTL,
@@ -572,7 +569,7 @@ app.get('/system/threats/:system_id', async (req: Request, res: Response) => {
     }
 
     if (killsRaw.length === 0) {
-      THREAT_CACHE[systemId] = { data: result, expiry: now + THREAT_CACHE_TTL };
+      THREAT_CACHE[system_id] = { data: result, expiry: now + THREAT_CACHE_TTL };
       return res.json(result);
     }
 
@@ -583,7 +580,7 @@ app.get('/system/threats/:system_id', async (req: Request, res: Response) => {
       )
     );
 
-    const gates = GATE_DATA[systemId] || [];
+    const gates = GATE_DATA[system_id] || [];
     const killCountByGate: Record<number, number> = {};
 
     for (const res_ of esiResults) {
@@ -615,6 +612,9 @@ app.get('/system/threats/:system_id', async (req: Request, res: Response) => {
           if (DICTOR_SHIP_IDS.has(shipId)) {
             result.interdictors = true;
           }
+          if (HIC_SHIP_IDS.has(shipId)) {
+            result.hictors = true;
+          }
           if (SMARTBOMB_WEAPON_IDS.has(weaponId)) {
             result.smartbombs = true;
           }
@@ -642,7 +642,7 @@ app.get('/system/threats/:system_id', async (req: Request, res: Response) => {
     console.error(`Threat detection error for system ${req.params.system_id}: ${err.message}`);
   }
 
-  THREAT_CACHE[systemId] = { data: result, expiry: now + THREAT_CACHE_TTL };
+  THREAT_CACHE[system_id] = { data: result, expiry: now + THREAT_CACHE_TTL };
   res.json(result);
 });
 
@@ -665,7 +665,7 @@ app.get('/system/details/:system_id', async (req: Request, res: Response) => {
       client.get(`${ZKILL_URL}/solarSystemID/${system_id}/pastSeconds/43200/`),
     ]);
 
-    const scoutData = await getSoutData(client);
+    const scoutData = await getScoutData(client);
     const sigs: Array<{ id: string; target: string; remaining: number }> = [];
 
     for (const s of scoutData) {
@@ -762,7 +762,7 @@ app.get('/callback', async (req: Request, res: Response) => {
     const { code } = CallbackQuerySchema.parse(req.query);
     const client = createClient();
 
-    const authHeader = Buffer.from(`${CLIENT_ID}:${SECRET_KEY}`).toString('base64');
+    const authHeader = buildAuthHeader();
 
     const tRes = await client.post(
       'https://login.eveonline.com/v2/oauth/token',
@@ -791,7 +791,10 @@ app.get('/callback', async (req: Request, res: Response) => {
     res.redirect('http://localhost:5173?login=success');
   } catch (err: any) {
     console.error(`Callback error: ${err.message}`);
-    res.status(500).json({ error: 'Authentication failed' });
+    if (err.response) {
+      console.error(`  Status: ${err.response.status}, Data: ${JSON.stringify(err.response.data)}`);
+    }
+    res.status(500).json({ error: 'Authentication failed', detail: err.message });
   }
 });
 
