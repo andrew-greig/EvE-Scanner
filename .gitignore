@@ -1,19 +1,12 @@
-# Created by venv; see https://docs.python.org/3/library/venv.html
-
-# --- EVE Intel Project Specifics ---
+# Environment
 .env
+
+# Database
 eve_intel.db
+
+# SDE data (large files, regenerated on first run)
 *.jsonl
 *.zip
-
-# --- Python ---
-python-dotenv/
-__pycache__/
-*.py[cod]
-*$py.class
-.venv/
-venv/
-ENV/
 
 # --- Node / Frontend ---
 node_modules/
@@ -21,6 +14,13 @@ dist/
 dist-ssr/
 *.local
 .eslintcache
+
+# --- Backend ---
+backend/node_modules/
+backend/dist/
+backend/eve_intel.db
+backend/mapSolarSystems.jsonl
+backend/mapStargates.jsonl
 
 # --- OS Specific ---
 .DS_Store
