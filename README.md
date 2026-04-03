@@ -60,7 +60,7 @@ cd ..
 
 ## Configuration
 
-Create a `.env` file in the root directory with your EVE Online SSO credentials:
+Create a `.env` file in the `backend` directory with your EVE Online SSO credentials:
 
 ```env
 CLIENT_ID=your_eve_client_id
