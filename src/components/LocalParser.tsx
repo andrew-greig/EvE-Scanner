@@ -166,7 +166,7 @@ export default function LocalParser() {
       <div className="flex items-center gap-2 mb-4 border-b border-gray-800 pb-2">
         <Users size={18} className="text-blue-500" />
         <h2 className="text-sm font-black uppercase tracking-widest text-white">Local Intel</h2>
-        <span className="ml-auto text-[10px] font-mono bg-gray-800 px-2 py-0.5 rounded text-gray-400">
+        <span className="ml-auto text-[10px] font-mono bg-gray-800 px-2 py-0.5 rounded-lg text-gray-400">
           {pilots.length} IN SYSTEM
         </span>
       </div>
@@ -183,7 +183,7 @@ export default function LocalParser() {
           <button
             onClick={handleScan}
             disabled={isScanning || !rawText.trim()}
-            className="flex-1 flex items-center justify-center gap-2 bg-blue-700 hover:bg-blue-600 disabled:bg-gray-800 disabled:text-gray-600 text-white py-2 rounded font-black text-[10px] uppercase tracking-widest transition-colors"
+            className="flex-1 flex items-center justify-center gap-2 bg-blue-700 hover:bg-blue-600 disabled:bg-gray-800 disabled:text-gray-600 text-white py-2 rounded-lg font-black text-[10px] uppercase tracking-widest transition-colors"
           >
             {isScanning ? <Loader2 size={14} className="animate-spin" /> : <Scan size={14} />}
             Analyze Local
@@ -192,7 +192,7 @@ export default function LocalParser() {
           <button
             onClick={clearAll}
             disabled={isScanning || (!rawText && pilots.length === 0)}
-            className="px-3 flex items-center justify-center bg-red-900/30 hover:bg-red-900/60 disabled:bg-gray-900/50 text-red-500 border border-red-900/50 rounded transition-colors"
+            className="px-3 flex items-center justify-center bg-red-900/30 hover:bg-red-900/60 disabled:bg-gray-900/50 text-red-500 border border-red-900/50 rounded-lg transition-colors"
           >
             <Trash2 size={14} />
           </button>
@@ -215,7 +215,7 @@ export default function LocalParser() {
             return (
               <div 
                 key={p.id} 
-                className={`flex items-center justify-between p-2 border rounded transition-all ${p.isThreat ? 'border-red-500 animate-threat' : 'border-gray-800 hover:border-gray-700'}`}
+                className={`flex items-center justify-between p-2 border rounded-lg transition-all ${p.isThreat ? 'border-red-500 animate-threat' : 'border-gray-800 hover:border-gray-700'}`}
                 style={!p.isThreat ? { backgroundColor: allianceTint } : {}}
               >
                 <div className="flex items-center gap-3">

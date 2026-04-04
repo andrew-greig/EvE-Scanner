@@ -11,6 +11,51 @@
   100% { transform: translateX(100%); }
 }
 
+/* Starfield background animation */
+@keyframes twinkle {
+  0%, 100% { opacity: 0.2; transform: scale(0.8); }
+  50% { opacity: 1; transform: scale(1); }
+}
+
+@keyframes drift {
+  0% { background-position: 0 0, 0 0, 0 0; }
+  100% { background-position: 100px 100px, 50px 50px, 25px 25px; }
+}
+
+.starfield-bg {
+  position: relative;
+  overflow: hidden;
+}
+
+.starfield-bg::before {
+  content: '';
+  position: absolute;
+  inset: 0;
+  opacity: 0.15;
+  pointer-events: none;
+  background-image:
+    radial-gradient(2px 2px at 20% 30%, #ffffff, transparent),
+    radial-gradient(1.5px 1.5px at 40% 70%, #9ca3af, transparent),
+    radial-gradient(2px 2px at 60% 20%, #ffffff, transparent),
+    radial-gradient(1px 1px at 80% 50%, #d1d5db, transparent),
+    radial-gradient(1.5px 1.5px at 90% 80%, #9ca3af, transparent),
+    radial-gradient(2px 2px at 10% 60%, #ffffff, transparent),
+    radial-gradient(1px 1px at 30% 90%, #d1d5db, transparent),
+    radial-gradient(1.5px 1.5px at 50% 40%, #9ca3af, transparent),
+    radial-gradient(2px 2px at 70% 60%, #ffffff, transparent),
+    radial-gradient(1px 1px at 85% 25%, #d1d5db, transparent);
+  background-size: 200px 200px, 150px 150px, 200px 200px;
+  animation: drift 30s linear infinite;
+}
+
+.starfield-bg::after {
+  content: '';
+  position: absolute;
+  inset: -1px;
+  background: linear-gradient(to bottom right, rgba(59, 130, 246, 0.08), transparent 40%, transparent 60%, rgba(59, 130, 246, 0.05));
+  pointer-events: none;
+}
+
 /* Add a basic reset to ensure the app fills the screen */
 @layer base {
   html, body, #root {
@@ -18,5 +63,11 @@
     margin: 0;
     padding: 0;
     overflow: hidden;
+    font-family: 'Inter', system-ui, -apple-system, 'Segoe UI', Roboto, 'Helvetica Neue', Arial, sans-serif;
+  }
+
+  /* Modern rounded corners for buttons and cards */
+  button, .card, .btn, .rounded {
+    border-radius: 12px !important;
   }
 }

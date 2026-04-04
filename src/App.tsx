@@ -348,14 +348,14 @@ export default function App() {
   const activeStats = selectedId ? killStats[selectedId] : null;
 
   return (
-    <main className={`h-screen w-screen flex flex-col p-3 gap-3 bg-[#080808] text-gray-300 font-sans ${!isLoggedIn ? 'overflow-hidden' : ''}`}>
-      <header className="flex justify-between items-center px-4 py-2 bg-[#111] border border-gray-800 rounded">
+    <main className={`h-screen w-screen flex flex-col p-3 gap-3 bg-[#080808] text-gray-300 font-sans font-inter ${!isLoggedIn ? 'overflow-hidden' : ''}`}>
+      <header className="flex justify-between items-center px-4 py-2 bg-[#111] border border-gray-800 rounded-lg">
         <div className="flex items-center gap-4">
            <div className={`w-2 h-2 rounded-full ${isLoggedIn ? 'bg-green-500 animate-pulse' : 'bg-red-500'}`} />
            <span className="text-xs font-mono uppercase tracking-widest">{pilotName || "Offline"}</span>
            {isLoggedIn && (
              <div className="relative ml-4">
-               <form onSubmit={(e) => { e.preventDefault(); if (suggestions.length > 0) selectScoutSystem(suggestions[0]); }} className="flex items-center bg-black/40 border border-gray-800 rounded overflow-hidden">
+               <form onSubmit={(e) => { e.preventDefault(); if (suggestions.length > 0) selectScoutSystem(suggestions[0]); }} className="flex items-center bg-black/40 border border-gray-800 rounded-lg overflow-hidden">
                  <Search size={14} className="ml-3 text-gray-600" />
                  <input
                    type="text"
@@ -366,9 +366,9 @@ export default function App() {
                  />
                </form>
                {suggestions.length > 0 && (
-                 <div className="absolute top-full left-0 mt-1 w-72 bg-[#111] border border-gray-700 rounded shadow-2xl z-50 overflow-hidden">
+                 <div className="absolute top-full left-0 mt-1 w-72 bg-[#111] border border-gray-700 rounded-lg shadow-2xl z-50 overflow-hidden">
                    {suggestions.map((s) => (
-                     <button key={s.id} onClick={() => selectScoutSystem(s)} className="w-full flex items-center justify-between px-4 py-2.5 hover:bg-blue-900/20 transition-colors border-b border-gray-800 last:border-0">
+                     <button key={s.id} onClick={() => selectScoutSystem(s)} className="w-full flex items-center justify-between px-4 py-2.5 hover:bg-blue-900/20 transition-colors border-b border-gray-800 last:border-0 rounded-lg">
                        <div className="flex items-center gap-3">
                          <span className="text-sm font-black text-white">{s.name}</span>
                          <span className="font-mono text-sm font-black" style={{ color: getSecColor(s.sec) }}>{s.sec.toFixed(1)}</span>
@@ -383,14 +383,14 @@ export default function App() {
              </div>
            )}
            {viewMode === 'SCOUT' && (
-             <button onClick={() => { setViewMode('LIVE'); scoutSystemIdRef.current = null; setSelectedId(intel?.current?.id || null); }} className="ml-2 text-[10px] font-black uppercase tracking-widest bg-blue-600 hover:bg-blue-500 text-white px-3 py-1 rounded transition-all animate-pulse shadow-lg shadow-blue-900/20">Live: {intel?.current?.name}</button>
+             <button onClick={() => { setViewMode('LIVE'); scoutSystemIdRef.current = null; setSelectedId(intel?.current?.id || null); }} className="ml-2 text-[10px] font-black uppercase tracking-widest bg-blue-600 hover:bg-blue-500 text-white px-3 py-1 rounded-lg transition-all animate-pulse shadow-lg shadow-blue-900/20">Live: {intel?.current?.name}</button>
            )}
         </div>
         <div className="flex items-center gap-4">
-           <div className="w-32 h-1 bg-gray-900 rounded overflow-hidden border border-gray-800"><div className="h-full bg-blue-600 transition-all duration-1000" style={{ width: isLoggedIn ? `${progress}%` : '0%' }} /></div>
+           <div className="w-32 h-1 bg-gray-900 rounded-lg overflow-hidden border border-gray-800"><div className="h-full bg-blue-600 transition-all duration-1000" style={{ width: isLoggedIn ? `${progress}%` : '0%' }} /></div>
            {isLoggedIn && <button onClick={handleLogout} className="text-gray-600 hover:text-red-500 transition-colors ml-2 flex items-center gap-2 text-[10px] font-black uppercase tracking-widest"><LogOut size={14} /> Log Out</button>}
            {/* Mute toggle button */}
-            <button onClick={() => setIsMuted(!isMuted)} className="ml-2 flex items-center justify-center rounded-full p-1 text-gray-400 hover:text-white transition-colors" title={isMuted ? "Unmute TTS" : "Mute TTS"}>
+            <button onClick={() => setIsMuted(!isMuted)} className="ml-2 flex items-center justify-center rounded-lg p-1 text-gray-400 hover:text-white transition-colors" title={isMuted ? "Unmute TTS" : "Mute TTS"}>
               {isMuted ? <VolumeX size={16} /> : <Volume2 size={16} />}  
             </button>
            {!isLoggedIn && (
@@ -402,7 +402,7 @@ export default function App() {
       </header>
 
       <div className={`flex-1 grid grid-cols-12 gap-3 min-h-0 ${!isLoggedIn ? 'opacity-40 pointer-events-none grayscale-[0.5]' : ''}`}>
-        <section className="col-span-3 bg-[#111] border border-gray-800 rounded p-4 overflow-hidden flex flex-col"><LocalParser /></section>
+        <section className="col-span-3 starfield-bg bg-[#111] border border-gray-800 rounded p-4 overflow-hidden flex flex-col"><LocalParser /></section>
 
         <div className="col-span-9 grid grid-cols-9 gap-3 relative min-h-0">
 
@@ -427,7 +427,7 @@ export default function App() {
             <button
               onClick={() => displayIntel?.current && setSelectedId(displayIntel.current.id)}
               disabled={!displayIntel?.current}
-              className={`bg-[#111] border rounded p-6 flex flex-col items-center relative w-full text-left transition-all ${isCurrentSystemSelected ? 'border-blue-500 shadow-lg shadow-blue-900/20' : 'border-gray-800 hover:border-gray-600 cursor-pointer'}`}
+              className={`starfield-bg bg-[#111] border rounded p-6 flex flex-col items-center relative w-full text-left transition-all ${isCurrentSystemSelected ? 'border-blue-500 shadow-lg shadow-blue-900/20' : 'border-gray-800 hover:border-gray-600 cursor-pointer'}`}
             >
                {viewMode === 'SCOUT' && (
                  <div className="absolute top-4 left-4 text-[10px] font-black bg-orange-900/40 text-orange-400 px-2 py-1 rounded border border-orange-800/50 uppercase">Scouting Mode</div>
@@ -457,7 +457,7 @@ export default function App() {
                </div>
             </button>
 
-            <div className="flex-1 bg-[#111] border border-gray-800 rounded p-4 flex flex-col overflow-hidden">
+            <div className="flex-1 starfield-bg bg-[#111] border border-gray-800 rounded p-4 flex flex-col overflow-hidden">
                <div className="flex items-center gap-2 mb-4 text-gray-400 border-b border-gray-800 pb-2 font-black uppercase text-sm tracking-widest"><Zap size={18} /> Neighborhood</div>
                <div className="flex-1 overflow-y-auto space-y-2 pr-2 custom-scrollbar">
                   {displayIntel?.connections?.map((sys: any) => {
@@ -505,7 +505,7 @@ export default function App() {
             </div>
           </section>
 
-          <section className="col-span-4 bg-[#111] border border-gray-800 rounded p-5 flex flex-col overflow-hidden relative">
+          <section className="col-span-4 starfield-bg bg-[#111] border border-gray-800 rounded p-5 flex flex-col overflow-hidden relative">
             {activeSystem ? (
               <div className={`flex flex-col h-full gap-5 transition-opacity duration-300 ${isDetailLoading ? 'opacity-40' : 'opacity-100'}`}>
                 <div className="border-b border-gray-800 pb-3 flex justify-between items-center">
