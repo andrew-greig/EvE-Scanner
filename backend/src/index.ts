@@ -435,18 +435,40 @@ app.get('/search/suggest', async (req: Request, res: Response) => {
   try {
     const { q, current_id } = SearchSuggestQuerySchema.parse(req.query);
 
-    const matches = SYSTEM_INDEX
-      .filter((s) => s.name.toLowerCase().includes(q.toLowerCase()))
+    const queryLower = q.toLowerCase();
+    
+    // Filter and score matches by relevance
+    const scoredMatches = SYSTEM_INDEX
+      .filter((s) => s.name.toLowerCase().includes(queryLower))
+      .map((s) => {
+        const nameLower = s.name.toLowerCase();
+        let score: number;
+        
+        if (nameLower === queryLower) {
+          // Exact match - highest priority
+          score = 0;
+        } else if (nameLower.startsWith(queryLower)) {
+          // Prefix match - second priority
+          score = 1;
+        } else {
+          // Substring match - prioritize earlier positions in name
+          const position = nameLower.indexOf(queryLower);
+          score = 2 + position * 0.1; // Add small increment based on position
+        }
+        
+        return { system: s, score };
+      })
+      .sort((a, b) => a.score - b.score)
       .slice(0, 5)
-      .map((s) => ({ ...s }));
+      .map(({ system }) => ({ ...system }));
 
     if (current_id) {
-      for (const m of matches) {
+      for (const m of scoredMatches) {
         (m as any).jumps = getJumpDistance(current_id, m.id);
       }
     }
 
-    res.json(matches);
+    res.json(scoredMatches);
   } catch (err: any) {
     res.status(400).json({ error: err.message });
   }
