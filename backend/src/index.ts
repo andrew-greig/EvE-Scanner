@@ -491,7 +491,30 @@ app.get('/user/location', async (req: Request, res: Response) => {
 
     const { current, connections } = await getSystemWithConnections(client, currId);
 
-    res.json({ current, connections });
+    // Determine docked status from location response
+    const stationId = locRes.data.station_id || null;
+    const structureId = locRes.data.structure_id || null;
+    let isDocked = false;
+    let locationType: 'space' | 'station' | 'structure' = 'space';
+
+    if (stationId) {
+      isDocked = true;
+      locationType = 'station';
+    } else if (structureId) {
+      isDocked = true;
+      locationType = 'structure';
+    }
+
+    res.json({ 
+      current, 
+      connections,
+      docked_status: {
+        is_docked: isDocked,
+        location_type: locationType,
+        station_id: stationId,
+        structure_id: structureId,
+      }
+    });
   } catch (err: any) {
     console.error(`/user/location error: ${err.message}`);
     if (err.response) {

@@ -128,6 +128,8 @@ export default function App() {
   const [details, setDetails] = useState<any>(null);
   const [isDetailLoading, setIsDetailLoading] = useState(false);
   const [progress, setProgress] = useState(100);
+  // Docked status
+  const [dockedStatus, setDockedStatus] = useState<{ is_docked: boolean; location_type: 'space' | 'station' | 'structure' } | null>(null);
   // Mute toggle for TTS
   const [isMuted, setIsMuted] = useState(false);
   const muteRef = useRef(isMuted);
@@ -309,6 +311,11 @@ export default function App() {
       const liveData = await liveRes.json();
       setIntel(liveData);
 
+      // Update docked status from location response
+      if (liveData.docked_status) {
+        setDockedStatus(liveData.docked_status);
+      }
+
       if (viewMode === 'SCOUT' && scoutSystemIdRef.current) {
         const scoutRes = await fetch(`http://127.0.0.1:8000/system/scout/${scoutSystemIdRef.current}`);
         setScoutIntel(await scoutRes.json());
@@ -349,6 +356,17 @@ export default function App() {
 
   return (
     <main className={`h-screen w-screen flex flex-col p-3 gap-3 bg-[#080808] text-gray-300 font-sans font-inter ${!isLoggedIn ? 'overflow-hidden' : ''}`}>
+      {/* Docked Status Pill - Centered Top Bar */}
+      {isLoggedIn && dockedStatus && (
+        <div className={`fixed top-6 left-1/2 transform -translate-x-1/2 z-50 px-4 py-1 rounded-full border font-black uppercase tracking-[0.2em] text-xs transition-all duration-500 ${
+          dockedStatus.is_docked 
+            ? 'bg-green-900/80 text-green-400 border-green-500 shadow-lg shadow-green-900/50' 
+            : 'bg-gray-900/30 text-gray-700 border-gray-800'
+        }`}>
+          {dockedStatus.is_docked ? 'DOCKED' : 'UNDOCKED'}
+        </div>
+      )}
+
       <header className="flex justify-between items-center px-4 py-2 bg-[#111] border border-gray-800 rounded-lg">
         <div className="flex items-center gap-4">
            <div className={`w-2 h-2 rounded-full ${isLoggedIn ? 'bg-green-500 animate-pulse' : 'bg-red-500'}`} />
