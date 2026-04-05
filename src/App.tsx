@@ -563,6 +563,9 @@ export default function App() {
                 <div className="flex flex-col gap-2 mt-auto">
                   <a href={`https://zkillboard.com/system/${activeSystem.id}/`} target="_blank" rel="noreferrer" className="w-full flex items-center justify-center gap-2 bg-blue-700 hover:bg-blue-600 text-white py-3 rounded font-black text-xs uppercase tracking-widest shadow-lg">zKillboard Feed</a>
                   <a href={`https://evemaps.dotlan.net/system/${activeSystem.name}`} target="_blank" rel="noreferrer" className="w-full flex items-center justify-center gap-2 bg-gray-800 hover:bg-gray-700 text-white py-3 rounded font-black text-xs uppercase tracking-widest">Dotlan Intel</a>
+                  {viewMode === 'SCOUT' && intel?.current && (
+                    <a href={`https://eve-gatecheck.space/eve/#${intel.current.name}:${activeSystem.name}:shortest`} target="_blank" rel="noreferrer" className="w-full flex items-center justify-center gap-2 bg-purple-700 hover:bg-purple-600 text-white py-3 rounded font-black text-xs uppercase tracking-widest shadow-lg">Gatecamp Check</a>
+                  )}
                 </div>
               </div>
             ) : <div className="h-full flex flex-col items-center justify-center opacity-20"><Info size={40} /><p className="text-xs font-black uppercase mt-4">Select System</p></div>}
